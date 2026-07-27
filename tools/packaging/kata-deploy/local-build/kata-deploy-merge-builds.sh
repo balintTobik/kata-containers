@@ -74,7 +74,7 @@ pushd "${tarball_content_dir}"
 			# thus we need to rely on the VERSION file.
 			cp "${repo_root_dir}/VERSION" "${prefix}/"
 		else
-			git describe --tags > "${prefix}/VERSION"
+			git describe --tags --always > "${prefix}/VERSION"
 		fi
 		[[ -n "${kata_versions_yaml_file}" ]] && cp "${kata_versions_yaml_file}" "${prefix}/"
 	fi

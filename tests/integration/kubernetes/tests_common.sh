@@ -772,6 +772,28 @@ pod_exec_blocked_command() {
 	(echo "${exec_output}" | grep "ExecProcessRequest is blocked by policy" > /dev/null) || die "exec was not blocked by policy!"
 }
 
+collect_rootfs_debug_on_failure() {
+	local node="${1}"
+	local test_completed="${2:-}"
+
+	[[ -z "${test_completed:-}" ]] || return 0
+
+	echo "DEBUG: host mountinfo for kata-containers (via nsenter into host mount ns)"
+	exec_host "${node}" 'nsenter -t 1 -m -- cat /proc/self/mountinfo | grep kata-containers' || true
+
+	echo "DEBUG: mount propagation types for kata dirs"
+	exec_host "${node}" 'nsenter -t 1 -m -- findmnt -o TARGET,PROPAGATION,SOURCE | grep kata' || true
+
+	echo "DEBUG: mounts/ rootfs content (bind mount destination from CRI-O overlay)"
+	exec_host "${node}" 'nsenter -t 1 -m -- sh -c "for d in /run/kata-containers/shared/sandboxes/*/mounts/*/rootfs; do echo \"--- \$d ---\"; ls \"\$d\" 2>/dev/null | head -5 || echo \"(empty)\"; done"' || true
+
+	echo "DEBUG: shared/ rootfs content (virtiofsd source, should match mounts/ via slave propagation)"
+	exec_host "${node}" 'nsenter -t 1 -m -- sh -c "for d in /run/kata-containers/shared/sandboxes/*/shared/*/rootfs; do echo \"--- \$d ---\"; ls \"\$d\" 2>/dev/null | head -5 || echo \"(empty)\"; done"' || true
+
+	echo "DEBUG: virtiofsd process args (cache mode and shared-dir)"
+	exec_host "${node}" 'nsenter -t 1 -m -- sh -c "ps aux | grep virtiofsd | grep -v grep"' || true
+}
+
 # Common teardown for tests.
 #
 # Parameters:
@@ -783,6 +805,7 @@ teardown_common() {
 	local node_start_time="$2"
 
 	kubectl describe pods
+	collect_rootfs_debug_on_failure "${node}" "${BATS_TEST_COMPLETED:-}"
 	k8s_delete_all_pods_if_any_exists || true
 
 	local node_end_time
@@ -918,7 +941,10 @@ print_node_journal_since_test_start() {
 	local BATS_TEST_COMPLETED="${3:-}"
 
 	if [[ -n "${node_start_time:-}" && -z "${BATS_TEST_COMPLETED:-}" ]]; then
-		echo "DEBUG: system logs of node '${node}' since test start time (${node_start_time})"
+		echo "DEBUG: kata logs of node '${node}' since test start time (${node_start_time})"
 		exec_host "${node}" journalctl -t "kata" --since '"'"${node_start_time}"'"' -o cat || true
+
+		echo "DEBUG: crio logs of node '${node}' since test start time (${node_start_time})"
+		exec_host "${node}" journalctl -t "crio" --since '"'"${node_start_time}"'"' -o cat || true
 	fi
 }

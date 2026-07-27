@@ -42,6 +42,8 @@ setup() {
 }
 
 teardown(){
+	collect_rootfs_debug_on_failure "${node}" "${BATS_TEST_COMPLETED:-}"
+
 	# Debugging information
 	kubectl describe "pod/$pod_name"
 

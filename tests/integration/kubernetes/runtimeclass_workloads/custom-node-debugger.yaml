@@ -8,6 +8,7 @@ kind: Pod
 metadata:
   name: ${POD_NAME}
 spec:
+  hostPID: true
   affinity:
     nodeAffinity:
       requiredDuringSchedulingIgnoredDuringExecution:

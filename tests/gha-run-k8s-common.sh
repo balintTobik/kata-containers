@@ -1207,11 +1207,32 @@ VERIFICATION_POD_EOF
 		[runtime]
 		kubelet_root_dir = "/var/lib/k0s/kubelet"
 		TOML
-		for config_d in "${kata_config_base}"/runtimes/*/config.d \
+		for config_d in "${kata_config_base}"/custom-runtimes/*/config.d \
+		                 "${kata_config_base}"/runtimes/*/config.d \
 		                 "${kata_config_base}"/runtime-rs/runtimes/*/config.d; do
 			[[ -d "${config_d}" ]] || continue
 			echo "${dropin_content}" | sudo tee "${config_d}/22-k0s-kubelet-root.toml" > /dev/null
 			info "Wrote ${config_d}/22-k0s-kubelet-root.toml"
+		done
+		echo "::endgroup::"
+
+		# virtiofsd with --cache=auto can serve stale (empty) directory
+		# listings when a bind mount appears under the shared dir after
+		# virtiofsd has already cached the parent.  This race is wider on
+		# resource-constrained CI runners and causes intermittent
+		# "file not found" failures on container creation.
+		echo "::group::virtiofsd cache=never drop-in for CRI-O"
+		local virtiofsd_dropin
+		read -r -d '' virtiofsd_dropin <<-'TOML' || true
+		[hypervisor.qemu]
+		virtio_fs_cache = "never"
+		TOML
+		for config_d in "${kata_config_base}"/custom-runtimes/*/config.d \
+		                 "${kata_config_base}"/runtimes/*/config.d \
+		                 "${kata_config_base}"/runtime-rs/runtimes/*/config.d; do
+			[[ -d "${config_d}" ]] || continue
+			echo "${virtiofsd_dropin}" | sudo tee "${config_d}/23-virtiofsd-no-cache.toml" > /dev/null
+			info "Wrote ${config_d}/23-virtiofsd-no-cache.toml"
 		done
 		echo "::endgroup::"
 	fi

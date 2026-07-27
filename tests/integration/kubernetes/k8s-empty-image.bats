@@ -21,6 +21,7 @@ setup() {
 }
 
 @test "Test image with no layers cannot run" {
+	[ "${CONTAINER_RUNTIME}" == "crio" ] && skip "CRI-O retry loop blocks error reporting within test timeout"
 	# Error from run-k8s-tests (ubuntu, qemu, small):
 	#
 	# failed to create containerd task: failed to create shim task: the file sleep was not found
@@ -49,6 +50,8 @@ setup() {
 }
 
 teardown() {
+	collect_rootfs_debug_on_failure "${node}" "${BATS_TEST_COMPLETED:-}"
+
 	# Debugging information
 	kubectl describe "pod/${pod_name}"
 	kubectl get "pod/${pod_name}" -o yaml
