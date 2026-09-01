@@ -26,6 +26,35 @@ on:
         required: false
         type: string
         default: ""
+# TODO: Remove workflow_dispatch before contributing upstream.
+  workflow_dispatch:
+    inputs:
+      tarball-suffix:
+        required: false
+        type: string
+      registry:
+        required: true
+        type: string
+        default: ghcr.io
+      repo:
+        required: true
+        type: string
+        default: kata-containers/kata-deploy-ci
+      tag:
+        required: true
+        type: string
+        default: 11131-c8d7334fc18aadb7e198b912342eeeed871b9e8c-amd64
+      pr-number:
+        required: false
+        type: string
+        default: ""
+      commit-hash:
+        required: false
+        type: string
+      target-branch:
+        required: false
+        type: string
+        default: main
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-crio
@@ -51,7 +80,7 @@ jobs:
       contents: read
     env:
       DOCKER_REGISTRY: ${{ inputs.registry }}
-      DOCKER_REPO: ${{ inputs.repo }}
+      DOCKER_REPO: balinttobik/kata-deploy-ci
       DOCKER_TAG: ${{ inputs.tag }}
       GH_PR_NUMBER: ${{ inputs.pr-number }}
       KATA_HOST_OS: ubuntu
@@ -64,7 +93,8 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.commit-hash }}
+          # ref: ${{ inputs.commit-hash }}
+          ref: ${{ inputs.commit-hash || github.ref }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -74,11 +104,20 @@ jobs:
         env:
           TARGET_BRANCH: ${{ inputs.target-branch }}
 
-      - name: get-kata-tools-tarball
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          name: kata-tools-static-tarball-amd64${{ inputs.tarball-suffix }}
-          path: kata-tools-artifacts
+      # - name: get-kata-tools-tarball
+      #   uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+      #   with:
+      #     name: kata-tools-static-tarball-amd64${{ inputs.tarball-suffix }}
+      #     path: kata-tools-artifacts
+      - name: get-kata-tools-tarball (workflow_dispatch)
+        run: |
+          mkdir -p kata-tools-artifacts
+          gh release download 4.0.0 \
+            --repo kata-containers/kata-containers \
+            --pattern 'kata-tools-static-*-amd64.tar.zst' \
+            --dir kata-tools-artifacts
+          mv kata-tools-artifacts/kata-tools-static-*-amd64.tar.zst \
+            kata-tools-artifacts/kata-tools-static.tar.zst
 
       - name: Install kata-tools
         run: bash tests/integration/kubernetes/gha-run.sh install-kata-tools kata-tools-artifacts

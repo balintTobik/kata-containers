@@ -66,7 +66,7 @@ jobs:
       contents: read
     env:
       DOCKER_REGISTRY: ${{ inputs.registry }}
-      DOCKER_REPO: ${{ inputs.repo }}
+      DOCKER_REPO: balinttobik/kata-deploy-ci
       DOCKER_TAG: ${{ inputs.tag }}
       GH_PR_NUMBER: ${{ inputs.pr-number }}
       KATA_HOST_OS: ubuntu
