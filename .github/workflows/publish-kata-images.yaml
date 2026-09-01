@@ -173,6 +173,7 @@ jobs:
           IMAGE_KIND: ${{ matrix.image-kind }}
           PUSH_IMAGE: ${{ inputs.push }}
         run: |
+          REPO="${REPO,,}"
           if [ "${TAGS}" != "" ]; then
             tags="${TAGS}"
           else
