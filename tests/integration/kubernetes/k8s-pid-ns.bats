@@ -28,6 +28,15 @@ setup() {
 }
 
 @test "Check PID namespaces" {
+	# The pause process this looks for is not in the guest, so neither
+	# container's ps reports one. It is there under CRI-O with the Go runtime
+	# and under containerd with runtime-rs, so what CRI-O asks of runtime-rs
+	# alone leaves the sandbox without it; which of the two is at fault is not
+	# yet established.
+	if [[ "${CONTAINER_RUNTIME}" == "crio" && "${KATA_HYPERVISOR}" == *runtime-rs ]]; then
+		skip "no pause process in a CRI-O sandbox under runtime-rs"
+	fi
+
 	# Create the pod
 	kubectl create -f "${test_yaml_file}"
 
