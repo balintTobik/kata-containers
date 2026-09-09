@@ -183,6 +183,98 @@ containerd matches none of the presets.
     anything, naming the value to set. An explicit `containerd.configDir` overrides
     the derivation this check is about, so it does not apply in that case.
 
+The value carries one thing beyond that directory: where the kubelet keeps its root
+directory. A pod's `ConfigMap`, `Secret`, projected and downward-API volumes are
+written under it, and the Go runtime watches that path so later updates to them
+reach the running guest; the kubelet's Pod Resources API socket sits under it too,
+which both runtimes read to learn the GPUs a pod was allocated before cold-plugging
+them. `k0s` uses `/var/lib/k0s/kubelet` and `microk8s`
+`/var/snap/microk8s/common/var/lib/kubelet`; `k3s`, `rke2` and vanilla Kubernetes
+leave the kubelet's own `/var/lib/kubelet` alone and need nothing.
+
+!!! note "The kubelet is not the CRI runtime"
+
+    Unlike the containerd directory, this cannot be worked out on the node: a `k0s`
+    node running CRI-O or a containerd of its own still keeps its volumes under
+    `/var/lib/k0s`. So declare the flavour even when you pin
+    `containerd.configDir` — that pin takes only the check above out of the way.
+    The volume watch is the Go runtime's alone, runtime-rs recognising those volumes
+    by the shape of their paths wherever the kubelet root is, but the socket is read
+    by both. Getting either wrong is quiet: volume updates stop arriving, and GPU
+    cold plug falls back to CDI annotations.
+
+### nodeBinaries
+
+Some of what Kata needs on a node is not part of Kata: containerd's EROFS
+snapshotter, for instance, needs a `mkfs.erofs` from `erofs-utils` 1.8.2 or newer,
+which most distributions still do not package. When updating the node's packages is
+not on offer, `nodeBinaries` takes the binaries out of container images instead:
+
+```yaml title="values.yaml"
+nodeBinaries:
+  erofs-utils:                                      # (1)!
+    image: quay.io/kata-containers/erofs-utils:1.9.3
+    binaries: [mkfs.erofs, dump.erofs, fsck.erofs]  # (2)!
+    pullPolicy: IfNotPresent                        # (3)!
+```
+
+1. Each key names an entry and becomes the name of the container staging it, so it
+   has to be a valid container name — lowercase letters, digits and dashes,
+   beginning and ending with a letter or a digit — and cannot be one of the names
+   kata-deploy's own containers use. The render fails, naming the key, when it is
+   neither.
+2. Only what is listed here is taken, so an image built on a distribution does not
+   put the rest of its userland on the node. Each one names a single binary, not a
+   path or a pattern, and the render fails on anything else.
+3. Optional; defaults to the chart's `imagePullPolicy`.
+
+Every entry gets a container of its own, which copies the listed binaries into a
+pod-local volume and reaches nothing of the node's. One further container then
+installs whatever was staged into `/usr/local/bin`, ahead of `/usr/bin` in
+containerd's `PATH`, and records the names it installed so that a later run can take
+exactly those out again. That container runs the `kubectl` image, kata-deploy's own
+being distroless and having no shell to do this with.
+
+Each image needs a POSIX shell, `cp`, and every binary the entry lists, statically
+built, in one of `/usr/local/bin`, `/usr/local/sbin`, `/usr/bin`, `/usr/sbin`,
+`/bin`, `/sbin` or its root. Private images use the chart's `imagePullSecrets`.
+
+Adding another binary is a values change and nothing else, so this is the way to
+cover anything else a node turns out to lack.
+
+!!! warning "It will not replace a binary it did not install"
+
+    A file already in `/usr/local/bin` under a name an entry claims fails the
+    install, rather than being replaced, and the same goes for two entries claiming
+    the same name. Nothing on the node records where a binary in `/usr/local/bin`
+    came from, so kata-deploy only ever removes what its own marker file names.
+    Remove the file, or drop it from `nodeBinaries` to keep using it.
+
+    An install it refuses this way changes nothing: every name is checked before any
+    of them is written or removed, so the node keeps the set it already had.
+
+An uninstall takes the binaries out again, and changing an entry replaces what it
+installed. Dropping every entry leaves them in place until the release is
+uninstalled.
+
+!!! note "Side-by-side installs own separate sets"
+
+    Each release's marker file is named after its `env.multiInstallSuffix`, so
+    installing or uninstalling one leaves the binaries another one installed alone.
+    Two releases claiming the same name is still a conflict: whichever installs
+    second finds a file it did not install and fails.
+
+!!! note "One image per architecture being deployed to"
+
+    An image with no manifest for a node's architecture stalls that node's install
+    on the pull, so cover every architecture in the cluster. The `erofs-utils` image
+    above is published for `amd64` and `arm64` only.
+
+This requires `deploymentMode: job`. The staged pipeline is what puts the binaries
+in place before the host check looks for them; the DaemonSet runs the whole install
+in one container and has no such ordering. Setting `nodeBinaries` in `daemonset` mode
+fails the render rather than deploying something that cannot work.
+
 ## Deployment Modes (DaemonSet vs Job)
 
 The chart can install Kata on nodes in one of two ways, selected with the
@@ -739,6 +831,15 @@ See the default [`values.yaml`](#parameters) for the remaining `job.*` options
 
 We provide a few examples that you can pass to helm via the `-f`/`--values` flag.
 
+Each is published as a release asset and `-f` takes a URL, so helm fetches the
+file itself. Replace `VERSION` in both the flag and the URL, or use
+`/releases/latest/download/<file>` for the newest release.
+
+!!! warning "Releases up to and including 4.1.0"
+    Those releases do not carry the presets as assets. Fetch the desired file from
+    its tag instead, replacing `<file>` with the preset filename:
+    `https://raw.githubusercontent.com/kata-containers/kata-containers/refs/tags/VERSION/tools/packaging/kata-deploy/helm-chart/kata-deploy/<file>`
+
 ### [`try-kata-tee.values.yaml`](https://github.com/kata-containers/kata-containers/blob/main/tools/packaging/kata-deploy/helm-chart/kata-deploy/try-kata-tee.values.yaml)
 
 This file enables only the TEE (Trusted Execution Environment) shims for confidential computing:
@@ -746,7 +847,7 @@ This file enables only the TEE (Trusted Execution Environment) shims for confide
 ```sh
 helm install kata-deploy oci://ghcr.io/kata-containers/kata-deploy-charts/kata-deploy \
   --version VERSION \
-  -f try-kata-tee.values.yaml
+  -f https://github.com/kata-containers/kata-containers/releases/download/VERSION/try-kata-tee.values.yaml
 ```
 
 Includes:
@@ -767,7 +868,7 @@ DaemonSet on the node):
 ```sh
 helm install kata-deploy oci://ghcr.io/kata-containers/kata-deploy-charts/kata-deploy \
   --version VERSION \
-  -f try-kata-nvidia-cpu.values.yaml
+  -f https://github.com/kata-containers/kata-containers/releases/download/VERSION/try-kata-nvidia-cpu.values.yaml
 ```
 
 Includes:
@@ -785,7 +886,7 @@ DaemonSet on the node):
 ```sh
 helm install kata-deploy oci://ghcr.io/kata-containers/kata-deploy-charts/kata-deploy \
   --version VERSION \
-  -f try-kata-nvidia-gpu.values.yaml
+  -f https://github.com/kata-containers/kata-containers/releases/download/VERSION/try-kata-nvidia-gpu.values.yaml
 ```
 
 Includes:

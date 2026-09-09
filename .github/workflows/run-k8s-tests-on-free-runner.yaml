@@ -61,11 +61,12 @@ jobs:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.event.pull_request.number || github.ref }}-free-runner-${{ toJSON(matrix) }}
       cancel-in-progress: true
     runs-on: ubuntu-24.04
+    timeout-minutes: 70
     permissions:
       contents: read
     env:
       DOCKER_REGISTRY: ${{ inputs.registry }}
-      DOCKER_REPO: ${{ inputs.repo }}
+      DOCKER_REPO: balinttobik/kata-deploy-ci
       DOCKER_TAG: ${{ inputs.tag }}
       GH_PR_NUMBER: ${{ inputs.pr-number }}
       KATA_HOST_OS: ubuntu
