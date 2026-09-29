@@ -53,6 +53,42 @@ The optional `shims.<shim>.dropIn` field lets you add a custom Kata drop-in for 
 default (non-custom) runtime. kata-deploy writes it as
 `config.d/50-user-overrides.toml` for that shim.
 
+### Containerd pod annotations
+
+kata-deploy builds each containerd runtime's `pod_annotations` allowlist from
+that runtime's effective Kata configuration. Only
+`io.katacontainers.config.hypervisor.*` annotations whose names occur in the
+runtime's `enable_annotations` list are forwarded. This includes entries
+enabled with `shims.<shim>.allowedHypervisorAnnotations` or a Kata
+configuration drop-in. Agent, runtime, and container-resource annotations are
+not forwarded unless listed below.
+
+Additional containerd annotation patterns can be enabled globally or for one
+shim:
+
+```yaml title="values.yaml"
+containerd:
+  extraPodAnnotations:
+    - sgx.intel.com/epc
+
+shims:
+  qemu:
+    containerd:
+      extraPodAnnotations:
+        - example.com/kata-*
+```
+
+Patterns use containerd's matching syntax.
+
+!!! warning
+    `containerd.extraPodAnnotations: ["io.katacontainers.*"]` restores the former,
+    unrestricted Kata annotation forwarding. That is a security risk: any Kata
+    annotation reaches the runtime.
+
+With `env.multiInstallSuffix`, each installation derives the allowlists from
+its own installed Kata configurations and applies them only to its own suffixed
+runtime handlers.
+
 It's best to reference the default `values.yaml` file above for more details.
 
 ### NVIDIA guest settings
@@ -202,6 +238,42 @@ leave the kubelet's own `/var/lib/kubelet` alone and need nothing.
     by the shape of their paths wherever the kubelet root is, but the socket is read
     by both. Getting either wrong is quiet: volume updates stop arriving, and GPU
     cold plug falls back to CDI annotations.
+
+!!! warning "Only default installations are supported"
+
+    The install finds the node's CRI runtime by probing the systemd units each
+    distribution is known by, and restarts that unit, waits on it for readiness,
+    and hangs the snapshotter's service dependency off it:
+
+    | Distribution | Units probed                             |
+    | ------------ | ---------------------------------------- |
+    | K3s          | `k3s`, `k3s-agent`                       |
+    | RKE2         | `rke2-server`, `rke2-agent`              |
+    | k0s          | `k0scontroller`, `k0sworker`             |
+    | MicroK8s     | `snap.microk8s.daemon-containerd`        |
+
+    A node running one of these under any other unit name, under another init
+    system, or with its containerd configuration somewhere other than the
+    location that distribution installs it in, is not supported. Nothing detects
+    it, and `k8sDistribution` cannot make up the difference: it says which
+    configuration layout to write, never which unit to act on.
+
+    K3s is the easiest to get into this state. Its installer accepts
+    [`INSTALL_K3S_NAME`, `INSTALL_K3S_SYSTEMD_DIR` and
+    `INSTALL_K3S_TYPE`](https://docs.k3s.io/reference/env-variables), and can
+    install under openrc rather than systemd, so leave those unset.
+
+!!! warning "erofs and nydus require a node that has not used them before"
+
+    kata-deploy writes erofs and nydus settings into containerd's configuration.
+    Those settings — dm-verity mode, the merged-layer layout, the nydus proxy root —
+    have to match what existing layers were built to, or containerd can no longer
+    mount them.
+
+    Changing them on a node that has already pulled images under a different erofs or
+    nydus configuration breaks those layers. Deploy kata-deploy with erofs or nydus
+    **only on nodes where neither snapshotter has been used before**, and leave
+    `snapshotter.setup` empty on nodes that already have one of them configured.
 
 ### nodeBinaries
 
@@ -1431,13 +1503,16 @@ cluster (deployed by this chart with `node-feature-discovery.enabled=true` or fo
 - Intel TDX shims: `intel.feature.node.kubernetes.io/tdx: "true"`
 - IBM Secure Execution for Linux (SEL) shims (s390x): `feature.node.kubernetes.io/cpu-security.se.enabled: "true"`
 
-The chart uses Helm's `lookup` function to detect NFD (by looking for the
-`node-feature-discovery-worker` DaemonSet). Auto-inject only runs when NFD is detected and
-no manual `runtimeClass.nodeSelector` is set for that shim.
+The chart detects NFD once and uses that result for both these selectors and
+[TEE key advertisement](#tee-key-advertisement). Detection succeeds when this
+chart enables NFD, an external NFD workload is found by label, or the NFD API is
+registered. Auto-injection only runs when NFD is detected and the shim has no
+manual `runtimeClass.nodeSelector`.
 
-**Note**: NFD detection requires cluster access. During `helm template` (dry-run without a
-cluster), external NFD is not seen, so auto-injected labels are not added. Manual
-`runtimeClass.nodeSelector` values are still applied in all cases.
+!!! note "Detection needs a live cluster"
+    `helm template` cannot detect external NFD. Set a manual
+    `runtimeClass.nodeSelector` and `nodeFeatureRules.create: true` when rendering
+    manifests without cluster access.
 
 ## TEE key advertisement
 
@@ -1459,9 +1534,10 @@ nodeFeatureRules:
   create: auto   # auto | true | false
 ```
 
-`auto` renders them when NFD is in the picture: installed by this chart
-(`node-feature-discovery.enabled=true`), already present in the cluster, or its CRD
-is registered. `true` and `false` decide outright.
+`auto` renders them when NFD is in the picture, by the same detection the
+[RuntimeClass node selectors](#runtimeclass-node-selectors-for-tee-shims) use:
+installed by this chart (`node-feature-discovery.enabled=true`), already present in
+the cluster, or its CRD is registered. `true` and `false` decide outright.
 
 `false` turns off **both** halves: no rule, and no confidential `RuntimeClass` asks
 for a TEE key. It is the escape hatch for a cluster that wants no part of this — not
